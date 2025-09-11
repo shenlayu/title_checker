@@ -1,4 +1,9 @@
 torch
 pillow
 transformers
+
 openai
+hydra-core
+pytz
+wandb
+tenacity

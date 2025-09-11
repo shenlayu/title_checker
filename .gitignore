@@ -1,3 +1,6 @@
-data
+/data
 checkpoint
 todo.md
+configs
+__pycache__
+outputs
