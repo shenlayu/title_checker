@@ -1,0 +1,35 @@
+openai_api_key: ${oc.env:OPENAI_API_KEY,YourAPIKey}
+base_url: https://aihubmix.com/v1
+model: gpt-4o-mini
+
+max_workers: 4
+
+num_pos: 2
+num_neg: 2
+
+temperature: 1.0
+max_tokens: 50
+
+pos_system_prompt: You are an AI assistant that generates correct alternative titles for tables.
+neg_system_prompt: You are an AI assistant that generates fake alternative titles for tables.
+
+pos_prompt: |
+    Generate ${llm.num_pos} alternative titles that represent the information in the table, using both the table data and the original table title as references.
+    The new titles do not need to strictly match the original title in terms of selected data, relationships, or formatting; instead, aim for diversity. However, every title must accurately reflect information contained in the table.
+    Output exactly one generated title per line, and do not include anything else in your response.
+    The table data is as follows:
+    <raw_data>
+    The original title is as follows:
+    <title>
+
+neg_prompt: |
+    Generate ${llm.num_neg} alternative titles that contain incorrect or misleading information about the table.  
+    The generated titles should not accurately reflect the table data or the original title. They may include fabricated values, wrong relationships, or irrelevant details.  
+    Output exactly one generated title per line, and do not include anything else in your response.  
+    The table data is as follows:  
+    <raw_data>  
+    The original title is as follows:  
+    <title>  
+
+raw_data_symbol: <raw_data>
+title_symbol: <title>

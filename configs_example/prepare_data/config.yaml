@@ -1,0 +1,14 @@
+defaults:
+  - _self_
+  - llm: default
+  - data: default
+  - override /hydra/hydra_logging@_group_: none # hydra logger 会覆盖 rich loger, 禁用之
+  - override /hydra/job_logging@_group_: none
+
+seed: 42
+uid: null # 自动生成
+
+task_type: prepare_data
+skip_basic_data: false
+skip_final_data: false
+

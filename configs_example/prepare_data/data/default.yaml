@@ -1,0 +1,10 @@
+input_dir: /path
+output_dir: data/${uid}/
+
+# 输入文件夹中各个文件名称
+png: chart.png
+svg: chart.svg
+raw_data: data.json
+
+basic_data: ${data.output_dir}/basic_data.jsonl
+final_data: ${data.output_dir}/final_data.jsonl
