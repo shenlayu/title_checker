@@ -6,6 +6,12 @@ defaults:
 seed: 42
 uid: null
 
+env:
+  vars:
+      wandb_dir: .wandb
+      wandb_proj: your_proj
+      wandb_entity: your)entity
+
 input_path: ./data/tmp/final_data.jsonl
 output_dir: ./checkpoint/${.uid}/
 checkpoint_path: ./checkpoint/pretrained/

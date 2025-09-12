@@ -29,11 +29,13 @@ def set_seed(seed):
 
 def generate_unique_id(cfg):
     """ 为进程生成专属 UID """
-    if cfg.get('uid') is not None and cfg.wandb.id is not None:
+    if cfg.get("wandb") and cfg.get('uid') is not None and cfg.wandb.id is not None:
         assert cfg.get('uid') == cfg.wandb.id, 'Confliction: Wandb and uid mismatch!'
     cur_time = datetime.now().strftime("%b%-d-%-H:%M-")
-    given_uid = cfg.wandb.id or cfg.get('uid')
-    given_uid = cfg.get('uid')
+    if cfg.get("wandb"):
+        given_uid = cfg.wandb.id or cfg.get('uid')
+    else:
+        given_uid = cfg.get('uid')
     uid = given_uid if given_uid else cur_time + str(uuid4()).split('-')[0]
     return uid
 
@@ -70,7 +72,7 @@ def init_experiment(cfg):
         if not cfg.skip_final_data:
             init_path(cfg.data.final_data)
 
-        cfg_out_file = cfg.output_dir + 'hydra_cfg.yaml'
+        cfg_out_file = cfg.data.output_dir + 'hydra_cfg.yaml'
         save_cfg(cfg, cfg_out_file, as_global=True)
 
         return cfg, None
@@ -78,7 +80,7 @@ def init_experiment(cfg):
 
 def wandb_init(cfg) -> None:
     os.environ["WANDB_WATCH"] = "false"
-    if cfg.get("wandb") and cfg["wandb"].get("use_wandb", False) and get_rank() <= 0:
+    if cfg.get("use_wandb", False) and get_rank() <= 0:
         try:
             WANDB_DIR, WANDB_PROJ, WANDB_ENTITY = (
                 cfg.env.vars[k.lower()] for k in ['WANDB_DIR', 'WANDB_PROJ', 'WANDB_ENTITY'])

@@ -236,3 +236,8 @@ class WandbExpLogger:
     def save_file_to_wandb(self, file, base_path, policy='now', **kwargs):
         if wandb.run is not None and self.local_rank <= 0:
             wandb.save(file, base_path=base_path, policy=policy, **kwargs)
+
+def wandb_finish(result=None):
+    if wandb.run is not None:
+        wandb.summary.update(result or {})
+        wandb.finish()
