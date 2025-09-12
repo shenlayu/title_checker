@@ -1,4 +1,4 @@
-input_dir: /path
+input_dir: /your_path
 output_dir: data/${uid}/
 
 # 输入文件夹中各个文件名称

@@ -7,3 +7,5 @@ hydra-core
 pytz
 wandb
 tenacity
+easydict
+wandb

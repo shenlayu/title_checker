@@ -7,7 +7,7 @@ max_workers: 4
 num_pos: 2
 num_neg: 2
 
-temperature: 1.0
+temperature: 0.7
 max_tokens: 50
 
 pos_system_prompt: You are an AI assistant that generates correct alternative titles for tables.

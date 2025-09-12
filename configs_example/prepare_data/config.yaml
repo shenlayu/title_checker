@@ -6,7 +6,8 @@ defaults:
   - override /hydra/job_logging@_group_: none
 
 seed: 42
-uid: null # 自动生成
+# uid: null # 自动生成
+uid: null
 
 task_type: prepare_data
 skip_basic_data: false

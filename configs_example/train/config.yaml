@@ -1,0 +1,47 @@
+defaults:
+  - _self_
+  - override /hydra/hydra_logging@_group_: none # hydra logger 会覆盖 rich loger, 禁用之
+  - override /hydra/job_logging@_group_: none
+
+seed: 42
+uid: null
+
+input_path: ./data/tmp/final_data.jsonl
+output_dir: ./checkpoint/${.uid}/
+checkpoint_path: ./checkpoint/pretrained/
+model_name: null
+
+task_type: train
+num_epochs: 3
+
+logging:
+  level: info
+  log_wandb_metric_to_stdout: False
+
+optim:
+  num_epochs: 3
+  lr: 1e-5
+  weight_decay: 0.01
+  warmup_ratio: 0.05
+
+freeze:
+  freeze_vision: false
+  freeze_text: false
+
+dataset:
+  batch_size: 32
+  shuffle: true
+  num_workers: 4
+
+loss:
+  temperature: 0.07
+
+use_wandb: true
+wandb:
+  id: null
+  name: ${uid}
+  
+_unimportant_cfg:
+  fields: [ se_wandb, wandb, local_rank, task_type, logging ]
+  postfix: [ _path, _file, _dir, _url ]
+  prefix: [ _ ]

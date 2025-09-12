@@ -83,7 +83,8 @@ def generate_basic_data_dict(root_input_dir: str, basic_data_path: str,
             subfolder_path = os.path.join(root_input_dir, subfolder)
             try:
                 data_dict = _generate_single_basic_data_dict(subfolder_path, png_name, svg_name, raw_data_name)
-                f_out.write(json.dumps(data_dict, ensure_ascii=False) + "\n")
+                if data_dict:
+                    f_out.write(json.dumps(data_dict, ensure_ascii=False) + "\n")
             except Exception as e:
                 logger.warning(f"处理 {subfolder_path} 时出错: {e}")
 
@@ -103,6 +104,8 @@ def _generate_single_basic_data_dict(input_dir: str, png_name: str, svg_name: st
     
     svg_path = os.path.abspath(os.path.join(input_dir, svg_name))
     title = extract_chart_title(svg_path)
+    if title is None:
+        return None
 
     basic_data_dict = {
         "image_path": image_path,

@@ -1,6 +1,5 @@
 import os
 import sys
-import json
 
 root_path = os.path.abspath(os.path.dirname(__file__)).split("src")[0]
 os.chdir(root_path)
