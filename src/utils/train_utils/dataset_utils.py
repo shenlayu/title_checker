@@ -1,3 +1,4 @@
+import os
 import json
 
 import torch
@@ -12,41 +13,44 @@ class CLIPDataset(Dataset):
     """ CLIP 使用的数据集 """
     def __init__(self, input_path: str):
         self.items = []
+        bad_line, total_line = 0, 0
         with open(input_path, "r", encoding="utf-8") as f:
             for line in f:
                 line = line.strip()
                 if not line:
                     continue
+                total_line += 1
                 try:
                     line_json = json.loads(line)
                     assert "image_path" in line_json and "pos_texts" in line_json and "neg_texts" in line_json
                     line_json["pos_texts"] = self._clean_text(line_json["pos_texts"], "pos_texts")
                     line_json["neg_texts"] = self._clean_text(line_json["neg_texts"], "neg_texts")
-                    if not (line_json["pos_texts"] or line_json["neg_texts"]):
-                        logger.warning("样本无文本，已跳过")
+                    if not (line_json["pos_texts"] and line_json["neg_texts"]):
+                        bad_line += 1
                         continue
                     self.items.append(line_json)
-                except Exception as e:
-                    logger.warning(f"行解析错误: {e}")
+                except:
+                    bad_line += 1
                     continue
+        logger.info(f"总共 {total_line} 条数据，其中 {bad_line} 条无效，已去除")
 
     def _clean_text(self, x, key):
         """ 清除数据格式不正确的条目 """
         if isinstance(x, str):
             x = [x]
         elif not isinstance(x, list):
-            logger.warning(f"{key} 不是 list/str, 已忽略: {type(x)} -> {x}")
             return []
         out = []
         for text in x:
             if text is None:
-                continue
-            if isinstance(text, (str, int, float)):
-                s = str(text).strip()
-                if s:
-                    out.append(s)
+                return [] # 如果某一行存在 null, 直接去除这一行，以防影响训练
+            if not isinstance(text, (str, int, float)):
+                return []
+            s = str(text).strip()
+            if s:
+                out.append(s)
             else:
-                logger.warning(f"{key} 包含非标量，已忽略: {type(text)} -> {text}")
+                return []
         return out
 
     def __len__(self):

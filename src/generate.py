@@ -40,6 +40,7 @@ def generate(cfg):
             "neg_prompt": llm_config.neg_prompt,
             "raw_data_symbol": llm_config.raw_data_symbol,
             "title_symbol": llm_config.title_symbol,
+            "generate_num_symbol": llm_config.generate_num_symbol,
             "max_tokens": llm_config.max_tokens,
             "temperature": llm_config.temperature,
             "num_pos": llm_config.num_pos,

@@ -15,6 +15,7 @@ class LLM:
             neg_prompt: str,
             raw_data_symbol: str,
             title_symbol: str,
+            generate_num_symbol: str,
             max_tokens: int,
             temperature: float,
             num_pos: int,
@@ -29,6 +30,7 @@ class LLM:
         self.neg_prompt_template = neg_prompt
         self.raw_data_symbol = raw_data_symbol
         self.title_symbol = title_symbol
+        self.generate_num_symbol = generate_num_symbol
         self.max_tokens = max_tokens
         self.temperature = temperature
         self.num_pos = num_pos
@@ -53,15 +55,23 @@ class LLM:
         return response.choices[0].message.content if response.choices else ""
 
     @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=1, max=8))
-    def generate_pos(self, raw_data: Dict, origin_title: str) -> List[str]:
+    def generate_pos(self, raw_data: Dict, origin_title: str, generate_num: int) -> List[str]:
         """ 利用图表信息及原始标题生成正例 """
-        user_prompt = self._build_prompt(self.pos_prompt_template, raw_data, origin_title)
-        content = self._call_chat(self.pos_system_prompt, user_prompt)
-        return [l.strip() for l in content.splitlines() if l.strip()] if content else []
+        if self.num_pos > 0:
+            user_prompt = self._build_prompt(self.pos_prompt_template, raw_data, origin_title)
+            user_prompt = user_prompt.replace(self.generate_num_symbol, str(generate_num))
+            content = self._call_chat(self.pos_system_prompt, user_prompt)
+            return [l.strip() for l in content.splitlines() if l.strip()] if content else []
+        else:
+            return []
 
     @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=1, max=8))
-    def generate_neg(self, raw_data: Dict, origin_title: str) -> List[str]:
+    def generate_neg(self, raw_data: Dict, origin_title: str, generate_num: int) -> List[str]:
         """ 利用图表信息及原始标题生成负例 """
-        user_prompt = self._build_prompt(self.neg_prompt_template, raw_data, origin_title)
-        content = self._call_chat(self.neg_system_prompt, user_prompt)
-        return [l.strip() for l in content.splitlines() if l.strip()] if content else []
+        if self.num_neg > 0:
+            user_prompt = self._build_prompt(self.neg_prompt_template, raw_data, origin_title)
+            user_prompt = user_prompt.replace(self.generate_num_symbol, str(generate_num))
+            content = self._call_chat(self.neg_system_prompt, user_prompt)
+            return [l.strip() for l in content.splitlines() if l.strip()] if content else []
+        else:
+            return []

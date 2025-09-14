@@ -2,6 +2,7 @@
 import re
 import os
 import json
+import shutil
 from utils import time_logger
 
 from typing import Optional, Dict
@@ -120,9 +121,13 @@ def generate_final_dict(basic_data: str, final_data_path: str, llm_kwargs: Dict,
     max_workers = min(max_workers, os.cpu_count() or 1)
     logger.info(f"开始生成最终数据，使用 {max_workers} 个进程")
 
-    # 用 image_path 当 key, 构造已完成集合以用于断点续跑
-    done_keys = set()
+    # 如果文件存在，先复制到一个 tmp 文件中，而后在扫完文件后先清空之，最后再删掉 tmp 文件
+    tmp_path = final_data_path + ".tmp"
+
+    # 以 image_path 为 key, 记录已经生成了的正负例
+    generated_pos_neg = {}
     if os.path.exists(final_data_path) and os.path.getsize(final_data_path):
+        shutil.copy(final_data_path, tmp_path)
         with open(final_data_path, "r", encoding="utf-8") as f:
             for line in f:
                 line = line.strip()
@@ -130,11 +135,13 @@ def generate_final_dict(basic_data: str, final_data_path: str, llm_kwargs: Dict,
                     continue
                 try:
                     obj = json.loads(line)
-                    if "image_path" in obj:
-                        done_keys.add(obj["image_path"])
+                    image_path = obj["image_path"]
+                    pos_texts = obj["pos_texts"]
+                    neg_texts = obj["neg_texts"]
+
+                    generated_pos_neg[image_path] = (pos_texts, neg_texts)
                 except:
                     continue
-        logger.info(f"最终数据文件断点续跑，跳过 {len(done_keys)} 条数据")
 
     basic_records = []
     with open(basic_data, "r", encoding="utf-8") as f:
@@ -143,17 +150,19 @@ def generate_final_dict(basic_data: str, final_data_path: str, llm_kwargs: Dict,
             if not line:
                 continue
             basic_record = json.loads(line)
-            if basic_record.get("image_path") in done_keys:
-                continue
+            basic_record["generated_pos"], basic_record["generated_neg"] = \
+                generated_pos_neg.get(basic_record["image_path"], ([], []))
             basic_records.append(basic_record)
-        
+    
+    open(final_data_path, "w", encoding="utf-8").close()
     with open(final_data_path, "a", encoding="utf-8") as f:
         with ProcessPoolExecutor(max_workers=max_workers) as excutor:
             futures = [excutor.submit(_generate_final_dict_worker, record, llm_kwargs) for record in basic_records]
             for fut in tqdm(as_completed(futures), total=len(futures), desc="生成正负例"):
                 try:
                     result = fut.result()
-                    line = json.dumps(result, ensure_ascii=False)
+                    if result:
+                        line = json.dumps(result, ensure_ascii=False)
                 except Exception as e:
                     logger.exception(f"子任务失败：{e}")
                     continue
@@ -161,6 +170,9 @@ def generate_final_dict(basic_data: str, final_data_path: str, llm_kwargs: Dict,
                 f.write(line + "\n")
                 f.flush()
                 os.fsync(f.fileno())
+    
+    if os.path.exists(tmp_path):
+        os.remove(tmp_path)
 
 def _generate_final_dict_worker(record: Dict, llm_kwargs: Dict):
     """
@@ -179,13 +191,35 @@ def _generate_final_dict_worker(record: Dict, llm_kwargs: Dict):
             raw_data = json.load(f)
         except Exception as e:
             logger.warning(f"raw data 解析错误：{e}")
+            return None
 
     title = record["title"]
 
-    pos_texts = llm.generate_pos(raw_data, title)
-    pos_texts.append(title)
-    neg_texts = llm.generate_neg(raw_data, title)
+    generated_pos = record.get("generated_pos", [])
+    if title in generated_pos:
+        generated_pos_num = len(generated_pos) - 1
+    else:
+        generated_pos_num = len(generated_pos)
+    generate_pos_num = llm.num_pos - generated_pos_num
+    generated_neg = record.get("generated_neg", [])
+    generated_neg_num = len(generated_neg)
+    generate_neg_num = llm.num_neg - generated_neg_num
 
+    if generate_pos_num > 0:
+        pos_texts = llm.generate_pos(raw_data, title, generate_pos_num)
+    else:
+        pos_texts = []
+    pos_texts.extend(generated_pos)
+
+    if generate_neg_num > 0:
+        neg_texts = llm.generate_neg(raw_data, title, generate_neg_num)
+    else:
+        neg_texts = []
+    neg_texts.extend(generated_neg)
+
+    if title not in pos_texts:
+        pos_texts.append(title)
+    
     final_dict = {
         "image_path": record["image_path"],
         "pos_texts": pos_texts,

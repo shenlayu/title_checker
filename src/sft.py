@@ -8,11 +8,12 @@ sys.path.append(os.path.join(root_path, "src"))
 import torch
 import hydra
 from tqdm import tqdm
-from transformers import CLIPProcessor, CLIPModel, get_cosine_schedule_with_warmup
+from omegaconf import ListConfig
 from torch.utils.data import DataLoader, random_split
+from transformers import CLIPProcessor, CLIPModel, get_cosine_schedule_with_warmup
 
 from utils import time_logger, init_experiment, wandb_finish
-from utils.train_utils import CLIPDataset, make_collate, InfoNCE
+from utils.train_utils import CLIPDataset, make_collate, InfoNCE, BCE
 
 def split_dataset(dataset, train_ratio: float, valid_ratio: float, test_ratio: float, seed: int):
     """ 切分数据集 """
@@ -30,9 +31,8 @@ def split_dataset(dataset, train_ratio: float, valid_ratio: float, test_ratio: f
 def evaluate(model, dataloader, device, loss_fn):
     """ 评估模型 """
     model.eval()
-    loss_sum = 0.0
-    hit_sum = 0.0
-    num = 0
+    sums = {} # 任意指标的加和
+    count = 0
 
     for batch in dataloader:
         pixel_values = batch["pixel_values"].to(device)
@@ -48,15 +48,18 @@ def evaluate(model, dataloader, device, loss_fn):
             group_ptr = batch["group_ptr"].to(device),
             pos_mask = batch["pos_mask"].to(device)
         )
+        stats = {"loss": loss.detach(), **stats}
 
         B = pixel_values.shape[0]
-        loss_sum += float(loss.detach().cpu()) * B
-        hit_sum += float(stats["itc_top1"].detach().cpu()) * B
-        num += B
+        for k, v in stats.items():
+            val = float(v.detach().cpu()) if hasattr(v, "detach") else float(v)
+            sums[k] = sums.get(k, 0.0) + val * B
+        count += B
 
-    if num == 0:
-        return {"loss": float("nan"), "itc_top1": float("nan")}
-    return {"loss": loss_sum / num, "itc_top1": hit_sum / num}
+    if count == 0:
+        return {"loss": float("nan"), **({k: float("nan") for k in sums.keys()} if sums else {})}
+    averaged = {k: (v / count) for k, v in sums.items()}
+    return averaged
 
 def freeze_model(model, freeze_vision: bool, freeze_text: bool):
     """ 冻结模型的一部分 """
@@ -87,12 +90,16 @@ def train(cfg):
     train_ratio = cfg.dataset.get("train_ratio", 0.8)
     valid_ratio = cfg.dataset.get("valid_ratio", 0.1)
     test_ratio = cfg.dataset.get("test_ratio", 0.1)
+    loss_type = cfg.loss.get("loss_type", "InfoNCE")
     temperature = cfg.loss.get("temperature", 0.07)
     lr = cfg.optim.get("lr", 1e-5)
     weight_decay = cfg.optim.get("weight_decay", 0.01)
     warmup_ratio = cfg.optim.get("warmup_ratio", 0.05)
     num_epochs = cfg.get("num_epochs", 3)
     seed = cfg.get("seed", 42)
+    eval_type = cfg.get("eval_type", "itc_top1")
+    if isinstance(eval_type, ListConfig):   # 👈 关键
+        eval_type = list(eval_type)
     
     output_dir = cfg.output_dir
     checkpoint_path = cfg.checkpoint_path
@@ -142,7 +149,12 @@ def train(cfg):
         pin_memory=pin_memory
     )
 
-    loss_fn = InfoNCE(temperature)
+    if loss_type == "InfoNCE":
+        loss_fn = InfoNCE(temperature, eval_type)
+    elif loss_type == "BCE":
+        loss_fn = BCE(eval_type)
+    else:
+        raise NotImplementedError(f"不支持的 loss: {loss_type}")
 
     optimizer = torch.optim.AdamW(
         [p for p in model.parameters() if p.requires_grad],
@@ -157,12 +169,12 @@ def train(cfg):
     best_epoch = None
 
     logger.info(f"验证集评估 epoch=0")
-    val_stats = evaluate(model, valid_loader, device, loss_fn)
+    valid_stats = evaluate(model, valid_loader, device, loss_fn)
     logger.wandb_metric_log({
-        "valid/loss": val_stats["loss"],
-        "valid/itc_top1": val_stats["itc_top1"],
-        "valid/epoch": 0
-    }, level="info")
+        "valid/epoch": 0,
+        **{f"valid/{k}": (v.item() if hasattr(v, "item") else float(v))
+            for k, v in (valid_stats or {}).items()}
+        }, level="info")
 
     for epoch in range(1, num_epochs + 1):
         model.train()
@@ -199,19 +211,19 @@ def train(cfg):
                 "train/step_in_epoch": step,
                 "train/global_step": global_step_base + step,
                 **{f"train/{k}": (v.item() if hasattr(v, "item") else float(v))
-                for k, v in (stats or {}).items()}
+                    for k, v in (stats or {}).items()}
             }
             logger.wandb_metric_log(metric_dict, level="info")
         
         logger.info(f"验证集评估 epoch={epoch}")
-        val_stats = evaluate(model, valid_loader, device, loss_fn)
+        valid_stats = evaluate(model, valid_loader, device, loss_fn)
         logger.wandb_metric_log({
-            "valid/loss": val_stats["loss"],
-            "valid/itc_top1": val_stats["itc_top1"],
-            "valid/epoch": epoch
-        }, level="info")
-        if best_valid_loss is None or val_stats["loss"] <= best_valid_loss:
-            best_valid_loss = val_stats["loss"]
+            "valid/epoch": epoch,
+            **{f"valid/{k}": (v.item() if hasattr(v, "item") else float(v))
+                for k, v in (valid_stats or {}).items()}
+            }, level="info")
+        if best_valid_loss is None or valid_stats["loss"] <= best_valid_loss:
+            best_valid_loss = valid_stats["loss"]
             best_epoch = epoch
 
         save_dir = os.path.join(output_dir, f"epoch{epoch}")
@@ -228,9 +240,9 @@ def train(cfg):
         best_model = model
     test_stats = evaluate(best_model, test_loader, device, loss_fn)
     logger.wandb_metric_log({
-        "test/loss": test_stats["loss"],
-        "test/itc_top1": test_stats["itc_top1"]
-    }, level="info")
+        **{f"test/{k}": (v.item() if hasattr(v, "item") else float(v))
+            for k, v in (test_stats or {}).items()}
+        }, level="info")
 
     wandb_finish()
 
