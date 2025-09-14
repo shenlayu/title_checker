@@ -130,7 +130,7 @@ class BCE():
             selected_labels = torch.tensor(selected_labels, device=device, dtype=selected_logits.dtype)
             loss = F.binary_cross_entropy_with_logits(selected_logits, selected_labels)
         else:
-            loss = logits.new_tensor("nan")
+            loss = logits.new_tensor(float("nan"))
 
         eval_stats = {}
         with torch.no_grad():
