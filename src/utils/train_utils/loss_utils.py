@@ -1,6 +1,6 @@
 import torch
 import torch.nn.functional as F
-from typing import Union, List
+from typing import Union, List, Dict
 
 class InfoNCE():
     """ CLIP 使用的 loss """
@@ -13,17 +13,10 @@ class InfoNCE():
         texts = F.normalize(text_embeds, dim=-1)
         logits = (images @ texts.T) / self.temperature # logits[i][j] 表示图像 i 和文本 j 的相似度
 
-        B = logits.shape[0] # batch size
+        B, T = logits.shape # batch size, text count
         device = logits.device
 
-        pos_mask_full = torch.zeros_like(logits, dtype=torch.bool)
-        for row in range(B):
-            start_idx = group_ptr[row].item()
-            end_idx = group_ptr[row+1].item()
-            pos_slice = pos_mask[start_idx: end_idx] # 这一区间的是否为正样本布尔掩码
-            if pos_slice.any():
-                pos_idx = torch.arange(start_idx, end_idx, device=device)[pos_slice] # 标定区间后应用布尔掩码
-                pos_mask_full[row, pos_idx] = True
+        pos_mask_full = _Helper.build_pos_mask_full(B, T, group_ptr, pos_mask, device)
                 
         # InfoNCE 的对数分母
         denominator = torch.logsumexp(logits, dim=1)
@@ -40,67 +33,26 @@ class InfoNCE():
         else:
             loss = logits.new_tensor(float("nan")) # 和 logits 同设备，同 dtype 的单值 nan 张量
 
-        eval_stats = {} # 保存评估指标
-        with torch.no_grad():
-            if (isinstance(self.eval_type, str) and self.eval_type == "itc_top1") or \
-                isinstance(self.eval_type, list) and "itc_top1" in self.eval_type:
-                preds = logits.argmax(dim=1)
-                if valid_rows.any():
-                    hit = pos_mask_full[torch.arange(B, device=logits.device), preds]
-                    itc_top1 = hit[valid_rows].float().mean()
-                else:
-                    itc_top1 = logits.new_tensor(float("nan"))
-                eval_stats.update({"itc_top1": itc_top1.detach()})
-            if (isinstance(self.eval_type, str) and self.eval_type == "bc_acc") or \
-                isinstance(self.eval_type, list) and "bc_acc" in self.eval_type: # 记原始标题（最后一个正例）和第一个负例中相似度更大者
-                correct, total = 0, 0
-                for row in range(B):
-                    start_idx = group_ptr[row].item()
-                    end_idx = group_ptr[row+1].item()
-                    pos_slice = pos_mask[start_idx: end_idx]
-                    if not torch.any(pos_slice):
-                        continue
-                    last_pos_idx_local = torch.nonzero(pos_slice, as_tuple=False)[-1].item()
-                    last_pos_idx = start_idx + last_pos_idx_local
-
-                    neg_slice = ~pos_slice
-                    if not torch.any(neg_slice):
-                        continue
-                    first_neg_idx_local = torch.nonzero(neg_slice, as_tuple=False)[0].item()
-                    first_neg_idx = start_idx + first_neg_idx_local
-
-                    logit_pos = logits[row][last_pos_idx]
-                    logit_neg = logits[row][first_neg_idx]
-                    correct += int((logit_pos > logit_neg).item())
-                    total += 1
-                bc_acc = logits.new_tensor(float("nan")) if total == 0 else \
-                    torch.tensor(correct/total, device=logits.device)
-                eval_stats.update({"bc_acc": bc_acc})
+        eval_stats = _Helper.eval_metrics(logits, group_ptr, pos_mask, pos_mask_full, self.eval_type)
 
         return loss, eval_stats
     
 
 class BCE():
     """ 二分类 loss, 一个 batch 中一半用正例监督，一半用负例监督 """
-    def __init__(self, eval_type: Union[List[str], str]):
+    def __init__(self, temperature: float, eval_type: Union[List[str], str]):
+        self.temperature = temperature
         self.eval_type = eval_type
 
     def __call__(self, image_embeds, text_embeds, group_ptr, pos_mask):
         images = F.normalize(image_embeds, dim=-1)
         texts = F.normalize(text_embeds, dim=-1)
-        logits = (images @ texts.T)
+        logits = (images @ texts.T) / self.temperature
 
-        B = logits.shape[0]
+        B, T = logits.shape
         device = logits.device
 
-        pos_mask_full = torch.zeros_like(logits, dtype=torch.bool)
-        for row in range(B):
-            start_idx = group_ptr[row].item()
-            end_idx = group_ptr[row+1].item()
-            pos_slice = pos_mask[start_idx: end_idx]
-            if pos_slice.any():
-                pos_idx = torch.arange(start_idx, end_idx, device=device)[pos_slice]
-                pos_mask_full[row, pos_idx] = True
+        pos_mask_full = _Helper.build_pos_mask_full(B, T, group_ptr, pos_mask, device)
 
         mid = B // 2
         selected_logits = []
@@ -132,43 +84,107 @@ class BCE():
         else:
             loss = logits.new_tensor(float("nan"))
 
-        eval_stats = {}
+        eval_stats = _Helper.eval_metrics(logits, group_ptr, pos_mask, pos_mask_full, self.eval_type)
+
+        return loss, eval_stats
+
+class _Helper:
+    @staticmethod
+    def build_pos_mask_full(B: int, T: int, group_ptr: torch.Tensor, pos_mask: torch.Tensor, device) -> torch.Tensor:
+        pos_mask_full = torch.zeros((B, T), dtype=torch.bool, device=device)
+        for row in range(B):
+            start_idx = group_ptr[row].item()
+            end_idx = group_ptr[row+1].item()
+            pos_slice = pos_mask[start_idx: end_idx] # 这一区间的是否为正样本布尔掩码
+            if pos_slice.any():
+                pos_idx = torch.arange(start_idx, end_idx, device=device)[pos_slice] # 标定区间后应用布尔掩码
+                pos_mask_full[row, pos_idx] = True
+        return pos_mask_full
+
+    @staticmethod
+    def eval_metrics(
+        logits: torch.Tensor,
+        group_ptr: torch.Tensor,
+        pos_mask: torch.Tensor,
+        pos_mask_full: torch.Tensor,
+        eval_type: Union[List[str], str]
+    ) -> Dict[str, torch.Tensor]:
+        B, T = logits.shape
+        device = logits.device
+
+        eval_stats: Dict[str, torch.Tensor] = {}
         with torch.no_grad():
-            if (isinstance(self.eval_type, str) and self.eval_type == "itc_top1") or \
-                isinstance(self.eval_type, list) and "itc_top1" in self.eval_type:
+            valid_rows = pos_mask_full.any(dim=1)
+
+            if (isinstance(eval_type, str) and eval_type == "itc_top1") or \
+                (isinstance(eval_type, list) and "itc_top1" in eval_type):
                 preds = logits.argmax(dim=1)
-                valid_rows = pos_mask_full.any(dim=1)
                 if valid_rows.any():
-                    hit = pos_mask_full[torch.arange(B, device=logits.device), preds]
+                    hit = pos_mask_full[torch.arange(B, device=device), preds]
                     itc_top1 = hit[valid_rows].float().mean()
                 else:
                     itc_top1 = logits.new_tensor(float("nan"))
-                eval_stats.update({"itc_top1": itc_top1.detach()})
-            if (isinstance(self.eval_type, str) and self.eval_type == "bc_acc") or \
-                isinstance(self.eval_type, list) and "bc_acc" in self.eval_type:
+                eval_stats["itc_top1"] = itc_top1.detach()
+
+            if (isinstance(eval_type, str) and eval_type == "bc_acc") or \
+                (isinstance(eval_type, list) and "bc_acc" in eval_type):  # 记原始标题（最后一个正例）和第一个负例中相似度更大者
                 correct, total = 0, 0
                 for row in range(B):
-                    start_idx = group_ptr[row].item()
-                    end_idx = group_ptr[row+1].item()
-                    row_pos_slice = pos_mask[start_idx: end_idx]
-                    if not torch.any(row_pos_slice):
+                    start_idx, end_idx = group_ptr[row].item(), group_ptr[row+1].item()
+                    if end_idx <= start_idx:
                         continue
-                    last_pos_idx_local = torch.nonzero(row_pos_slice, as_tuple=False)[-1].item()
-                    last_pos_idx = start_idx + last_pos_idx_local
-
-                    row_neg_slice = ~row_pos_slice
-                    if not torch.any(row_neg_slice):
+                    row_pos = pos_mask[start_idx: end_idx]
+                    if not row_pos.any():
                         continue
-                    first_neg_idx_local = torch.nonzero(row_neg_slice, as_tuple=False)[0].item()
-                    first_neg_idx = start_idx + first_neg_idx_local
+                    last_pos_local = torch.nonzero(row_pos, as_tuple=False)[-1].item()
+                    last_pos = start_idx + last_pos_local
 
-                    logit_pos = logits[row, last_pos_idx]
-                    logit_neg = logits[row, first_neg_idx]
-                    correct += int((logit_pos > logit_neg).item())
+                    row_neg = ~row_pos
+                    if not row_neg.any():
+                        continue
+                    first_neg_local = torch.nonzero(row_neg, as_tuple=False)[0].item()
+                    first_neg = start_idx + first_neg_local
+
+                    correct += int((logits[row, last_pos] > logits[row, first_neg]).item())
                     total += 1
 
                 bc_acc = logits.new_tensor(float("nan")) if total == 0 else \
                     torch.tensor(correct / total, device=device)
-                eval_stats.update({"bc_acc": bc_acc})
+                eval_stats["bc_acc"] = bc_acc
 
-        return loss, eval_stats
+            if (isinstance(eval_type, str) and eval_type == "auc") or \
+                (isinstance(eval_type, list) and ("auc" in eval_type)):
+                pos_in, neg_in, pos_cross, neg_cross = [], [], [], []
+
+                for row in range(B):
+                    start_idx, end_idx = group_ptr[row].item(), group_ptr[row+1].item()
+                    if end_idx <= start_idx:
+                        continue
+                    labels = pos_mask[start_idx: end_idx]
+                    if labels.any():
+                        scores_in = logits[row, start_idx: end_idx]
+                        pos_in.append(scores_in[labels])
+                        neg_in.append(scores_in[~labels])
+
+                        if (end_idx - start_idx) < T:
+                            pos_cross.append(scores_in[labels])
+                            left  = torch.arange(0, start_idx, device=device)
+                            right = torch.arange(end_idx, T, device=device)
+                            if left.numel() + right.numel() > 0:
+                                neg_idx = torch.cat([left, right], dim=0)
+                                neg_cross.append(logits[row, neg_idx])
+
+                def _calc_auc(pos_list, neg_list):
+                    if len(pos_list) == 0 or len(neg_list) == 0:
+                        return logits.new_tensor(float("nan"))
+                    pos = torch.cat(pos_list, dim=0)
+                    neg = torch.cat(neg_list, dim=0)
+                    if pos.numel() == 0 or neg.numel() == 0:
+                        return logits.new_tensor(float("nan"))
+                    diff = pos[:, None] - neg[None, :]
+                    return (diff > 0).float().mean() + 0.5 * (diff == 0).float().mean()
+
+                eval_stats["auc_in_group"] = _calc_auc(pos_in, neg_in)
+                eval_stats["auc_cross_batch"] = _calc_auc(pos_cross, neg_cross)
+
+        return eval_stats

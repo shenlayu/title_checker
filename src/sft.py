@@ -22,10 +22,10 @@ def split_dataset(dataset, train_ratio: float, valid_ratio: float, test_ratio: f
 
     n = len(dataset)
     n_train = int(n * train_ratio)
-    n_val = int(n * valid_ratio)
-    n_test = n - n_train - n_val
+    n_valid = int(n * valid_ratio)
+    n_test = n - n_train - n_valid
     g = torch.Generator().manual_seed(seed)
-    return random_split(dataset, [n_train, n_val, n_test], generator=g)
+    return random_split(dataset, [n_train, n_valid, n_test], generator=g)
 
 @torch.no_grad()
 def evaluate(model, dataloader, device, loss_fn):
@@ -120,7 +120,7 @@ def train(cfg):
     model.to(device)
 
     full_dataset = CLIPDataset(input_path)
-    train_ds, val_ds, test_ds = split_dataset(
+    train_ds, valid_ds, test_ds = split_dataset(
         full_dataset, train_ratio=train_ratio, valid_ratio=valid_ratio, test_ratio=test_ratio, seed=seed
     )
     collate_fn = make_collate(processor)
@@ -133,7 +133,7 @@ def train(cfg):
         pin_memory=pin_memory
     )
     valid_loader = DataLoader(
-        dataset=val_ds,
+        dataset=valid_ds,
         batch_size=batch_size,
         shuffle=False,
         collate_fn=collate_fn,
@@ -152,7 +152,7 @@ def train(cfg):
     if loss_type == "InfoNCE":
         loss_fn = InfoNCE(temperature, eval_type)
     elif loss_type == "BCE":
-        loss_fn = BCE(eval_type)
+        loss_fn = BCE(temperature, eval_type)
     else:
         raise NotImplementedError(f"不支持的 loss: {loss_type}")
 

@@ -11,10 +11,9 @@ hydra:
 seed: 42
 uid: null
 
-# list / str, 可选: itc_top1, bc_acc
+# list / str, 可选: itc_top1, bc_acc, auc
 eval_type: # 选择的评估指标
-  - itc_top1
-  - bc_acc
+  - auc
 
 env:
   vars:
